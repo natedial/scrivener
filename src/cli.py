@@ -1,0 +1,313 @@
+"""CLI interface for Scrivener."""
+
+import logging
+from datetime import date, timedelta
+
+import typer
+from rich.console import Console
+from rich.table import Table
+
+from src.config import get_settings
+from src.db import get_engine
+from src.db.models import Base
+
+app = typer.Typer(name="scrivener", help="Economic and markets data sourcing platform")
+console = Console()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+
+
+@app.command()
+def init_db():
+    """Initialize the database schema."""
+    engine = get_engine()
+    console.print("Creating database tables...", style="yellow")
+    Base.metadata.create_all(engine)
+    console.print("Database initialized successfully!", style="green")
+
+
+@app.command()
+def fetch(
+    source: str = typer.Argument(..., help="Data source (fred, bls)"),
+    series: str = typer.Argument(..., help="Series ID (e.g., GDP, UNRATE)"),
+    start_date: str = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD)"),
+    end_date: str = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD)"),
+):
+    """Fetch data for a specific series."""
+    settings = get_settings()
+
+    # Parse dates
+    start = (
+        date.fromisoformat(start_date)
+        if start_date
+        else date.today() - timedelta(days=settings.default_lookback_years * 365)
+    )
+    end = date.fromisoformat(end_date) if end_date else date.today()
+
+    source_lower = source.lower()
+    if source_lower == "fred":
+        from src.fetchers.fred import FredFetcher
+
+        fetcher = FredFetcher()
+    elif source_lower == "bls":
+        from src.fetchers.bls import BlsFetcher
+
+        fetcher = BlsFetcher()
+    else:
+        console.print(f"Unknown source: {source}", style="red")
+        raise typer.Exit(1)
+
+    console.print(f"Fetching {source}:{series} from {start} to {end}...", style="yellow")
+
+    result = fetcher.fetch_and_store(series, start, end)
+
+    if result["status"] == "success":
+        console.print(
+            f"Success! Fetched {result['records_fetched']} records, "
+            f"inserted {result['records_inserted']}",
+            style="green",
+        )
+    else:
+        console.print(f"Error: {result.get('error')}", style="red")
+
+
+@app.command()
+def fetch_core(
+    source: str = typer.Argument("fred", help="Data source"),
+    start_date: str = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD)"),
+    end_date: str = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD)"),
+):
+    """Fetch all core series for a source."""
+    settings = get_settings()
+
+    start = (
+        date.fromisoformat(start_date)
+        if start_date
+        else date.today() - timedelta(days=settings.default_lookback_years * 365)
+    )
+    end = date.fromisoformat(end_date) if end_date else date.today()
+
+    source_lower = source.lower()
+
+    if source_lower == "fred":
+        from src.fetchers.fred import FredFetcher
+
+        fetcher = FredFetcher()
+        core_series = fetcher.get_core_series()
+        console.print(f"Fetching {len(core_series)} core FRED series...", style="yellow")
+        results = fetcher.fetch_multiple(list(core_series.keys()), start, end)
+
+    elif source_lower == "bls":
+        from src.fetchers.bls import BlsFetcher
+
+        fetcher = BlsFetcher()
+        core_series = fetcher.get_core_series()
+        console.print(f"Fetching {len(core_series)} core BLS series (batched)...", style="yellow")
+        # BLS uses optimized batch fetching
+        results = fetcher.fetch_core_series(start, end)
+
+    else:
+        console.print(f"Unknown source: {source}", style="red")
+        raise typer.Exit(1)
+
+    # Summary table
+    table = Table(title="Fetch Results")
+    table.add_column("Series", style="cyan")
+    table.add_column("Status", style="green")
+    table.add_column("Records", justify="right")
+
+    success_count = 0
+    for result in results:
+        status = result["status"]
+        if status == "success":
+            success_count += 1
+            table.add_row(
+                result["external_id"],
+                "[green]OK[/green]",
+                str(result["records_inserted"]),
+            )
+        else:
+            table.add_row(
+                result["external_id"],
+                "[red]ERROR[/red]",
+                result.get("error", "")[:30],
+            )
+
+    console.print(table)
+    console.print(f"\nCompleted: {success_count}/{len(results)} series", style="bold")
+
+
+@app.command()
+def list_series(source: str = typer.Argument("fred", help="Data source")):
+    """List available core series for a source."""
+    source_lower = source.lower()
+
+    if source_lower == "fred":
+        from src.fetchers.fred import FredFetcher
+
+        core_series = FredFetcher.get_core_series()
+        title = "Core FRED Series"
+
+    elif source_lower == "bls":
+        from src.fetchers.bls import BlsFetcher
+
+        core_series = BlsFetcher.get_core_series()
+        title = "Core BLS Series"
+
+    else:
+        console.print(f"Unknown source: {source}", style="red")
+        raise typer.Exit(1)
+
+    table = Table(title=title)
+    table.add_column("ID", style="cyan")
+    table.add_column("Description", style="white")
+
+    for series_id, description in sorted(core_series.items()):
+        table.add_row(series_id, description)
+
+    console.print(table)
+    console.print(f"\nTotal: {len(core_series)} series", style="dim")
+
+
+@app.command()
+def config():
+    """Show current configuration."""
+    settings = get_settings()
+
+    table = Table(title="Configuration")
+    table.add_column("Setting", style="cyan")
+    table.add_column("Value", style="white")
+
+    # Show non-sensitive settings
+    table.add_row("Database Host", settings.supabase_db_host or "(not set)")
+    table.add_row("Database Name", settings.supabase_db_name)
+    table.add_row("FRED API Key", "***" if settings.fred_api_key else "(not set)")
+    table.add_row("BLS API Key", "***" if settings.bls_api_key else "(not set)")
+    table.add_row("Default Lookback", f"{settings.default_lookback_years} years")
+    table.add_row("Sweep Time", f"{settings.daily_sweep_hour:02d}:{settings.daily_sweep_minute:02d}")
+    table.add_row("Timezone", settings.timezone)
+
+    console.print(table)
+
+
+@app.command()
+def scheduler(
+    daemon: bool = typer.Option(False, "--daemon", "-d", help="Run as background daemon"),
+):
+    """Start the scheduler for automated data fetches."""
+    from src.scheduler import SchedulerRunner
+
+    console.print("Starting Scrivener scheduler...", style="yellow")
+    console.print(f"  Daily sweep: {get_settings().daily_sweep_hour:02d}:{get_settings().daily_sweep_minute:02d} ET")
+    console.print(f"  Calendar check: 6am & 6pm ET")
+    console.print("\nPress Ctrl+C to stop\n", style="dim")
+
+    runner = SchedulerRunner(blocking=not daemon)
+
+    try:
+        runner.start()
+    except KeyboardInterrupt:
+        console.print("\nShutting down...", style="yellow")
+        runner.stop()
+        console.print("Scheduler stopped.", style="green")
+
+
+@app.command()
+def sweep(
+    source: str = typer.Argument("all", help="Source to sweep (fred, bls, all)"),
+):
+    """Run an immediate sweep (fetch all core series)."""
+    from src.scheduler.jobs import daily_sweep_fred, daily_sweep_bls, daily_sweep_all
+
+    console.print(f"Running immediate sweep: {source}...", style="yellow")
+
+    if source.lower() == "fred":
+        result = daily_sweep_fred()
+    elif source.lower() == "bls":
+        result = daily_sweep_bls()
+    elif source.lower() == "all":
+        result = daily_sweep_all()
+    else:
+        console.print(f"Unknown source: {source}", style="red")
+        raise typer.Exit(1)
+
+    console.print(f"Sweep complete!", style="green")
+    console.print(result)
+
+
+@app.command()
+def releases():
+    """List known economic release types."""
+    from src.scheduler.calendar import get_release_definitions
+
+    definitions = get_release_definitions()
+
+    table = Table(title="Economic Releases")
+    table.add_column("Release", style="cyan")
+    table.add_column("Source", style="white")
+    table.add_column("Time (ET)", style="white")
+    table.add_column("Frequency", style="white")
+    table.add_column("Description", style="dim")
+
+    for name, info in sorted(definitions.items()):
+        table.add_row(
+            name,
+            info["source"],
+            info["typical_time"],
+            info["frequency"],
+            info["description"],
+        )
+
+    console.print(table)
+
+
+@app.command()
+def upcoming(
+    days: int = typer.Option(1, "--days", "-d", help="Number of days to look ahead"),
+    country: str = typer.Option("US", "--country", "-c", help="Country filter"),
+):
+    """Show upcoming economic events from the calendar."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    from src.scheduler.calendar import EconomicEventsCalendar
+
+    tz = ZoneInfo("America/New_York")
+    now = datetime.now(tz)
+    end = now + timedelta(days=days)
+
+    calendar = EconomicEventsCalendar()
+    events = calendar.get_upcoming_events(start=now, end=end, country=country)
+
+    if not events:
+        console.print(f"No mapped events found in the next {days} day(s)", style="yellow")
+        return
+
+    table = Table(title=f"Upcoming Events ({country}, next {days} day(s))")
+    table.add_column("Time (ET)", style="cyan")
+    table.add_column("Event", style="white")
+    table.add_column("Type", style="yellow")
+    table.add_column("FRED Series", style="dim")
+    table.add_column("BLS Series", style="dim")
+
+    for event in events:
+        time_str = event["scheduled_time"].strftime("%m/%d %H:%M")
+        fred = ", ".join(event["fred_series"][:2]) + ("..." if len(event["fred_series"]) > 2 else "")
+        bls = ", ".join(event["bls_series"][:2]) + ("..." if len(event["bls_series"]) > 2 else "")
+
+        table.add_row(
+            time_str,
+            event["event_name"][:40],
+            event["release_type"],
+            fred or "-",
+            bls or "-",
+        )
+
+    console.print(table)
+    console.print(f"\nTotal: {len(events)} mapped events", style="dim")
+
+
+if __name__ == "__main__":
+    app()
