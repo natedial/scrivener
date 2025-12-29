@@ -6,7 +6,8 @@ Scrivener collects, normalizes, and serves economic and financial market data fr
 
 ## Features
 
-- **Multi-source data collection**: FRED (31 series), BLS (10+ series), Treasury auctions
+- **Multi-source data collection**: FRED (31 series), BLS (10+ series), Treasury auctions, Fed speeches
+- **Central bank communications**: Speeches, statements, and press conferences from Federal Reserve
 - **Automated scheduling**: Daily sweeps + calendar-driven fetches for economic releases
 - **Query layer**: SeriesQuery and AuctionQuery utilities for data access
 - **REST API**: FastAPI service with auto-generated docs
@@ -104,6 +105,10 @@ scrivener serve --port 8000
 | `releases` | List known economic release types |
 | `upcoming` | Show upcoming economic events |
 | `serve` | Start the API server |
+| `seed-speakers` | Seed default Fed speakers |
+| `list-speakers` | List all speakers |
+| `fetch-speech <url>` | Fetch and store a speech |
+| `list-speeches` | List stored speeches |
 
 ## API Endpoints
 
@@ -124,6 +129,16 @@ When running `scrivener serve`, the following endpoints are available:
 - `GET /auctions/cusip/{cusip}` - Get by CUSIP
 - `GET /auctions/yields/{type}/{term}` - Get yield history
 - `GET /auctions/latest/{type}/{term}` - Get latest for type/term
+
+### Speakers
+- `GET /speakers` - List all speakers
+- `GET /speakers/{id}` - Get speaker by ID
+
+### Speeches
+- `GET /speeches` - List speeches with filters
+- `GET /speeches/{id}` - Get speech with full text
+- `GET /speeches/by-url` - Get speech by URL
+- `GET /speeches/speaker/{name}` - Get speeches by speaker
 
 ### Health
 - `GET /health` - Health check
@@ -149,6 +164,11 @@ API documentation available at `/docs` when the server is running.
 ### Treasury
 - Auction results (Bills, Notes, Bonds, TIPS, FRN)
 - Upcoming auctions
+
+### Fed Speeches
+- Speeches, statements, press conferences
+- HTML and PDF extraction
+- Default speakers: Fed Board of Governors
 
 ## Scheduler
 

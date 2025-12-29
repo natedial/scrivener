@@ -477,5 +477,132 @@ def query_auctions(
         console.print(table)
 
 
+@app.command()
+def seed_speakers():
+    """Seed the database with default Fed speakers."""
+    from src.fetchers.fed_speeches import FedSpeechFetcher
+
+    fetcher = FedSpeechFetcher()
+    count = fetcher.seed_default_speakers()
+    console.print(f"Seeded {count} new speakers", style="green")
+
+
+@app.command()
+def list_speakers():
+    """List all speakers in the database."""
+    from src.db import get_session
+    from src.db.models import Speaker
+
+    with get_session() as session:
+        speakers = session.query(Speaker).order_by(Speaker.institution, Speaker.name).all()
+
+        if not speakers:
+            console.print("No speakers found. Run 'seed-speakers' first.", style="yellow")
+            return
+
+        table = Table(title="Speakers")
+        table.add_column("ID", style="dim")
+        table.add_column("Name", style="cyan")
+        table.add_column("Title", style="white")
+        table.add_column("Institution", style="white")
+        table.add_column("Active", style="green")
+
+        for s in speakers:
+            table.add_row(
+                str(s.id),
+                s.name,
+                s.title or "-",
+                s.institution,
+                "Yes" if s.is_active else "No",
+            )
+
+        console.print(table)
+        console.print(f"\nTotal: {len(speakers)} speakers", style="dim")
+
+
+@app.command()
+def fetch_speech(
+    url: str = typer.Argument(..., help="URL of the speech"),
+    speaker: str = typer.Option(..., "--speaker", "-s", help="Speaker name"),
+    speech_date: str = typer.Option(..., "--date", "-d", help="Speech date (YYYY-MM-DD)"),
+    title: str = typer.Option(None, "--title", "-t", help="Speech title"),
+    speech_type: str = typer.Option("speech", "--type", help="Type: speech, statement, press_conference"),
+    source: str = typer.Option("Federal Reserve", "--source", help="Source institution"),
+):
+    """Fetch and store a single speech by URL."""
+    from src.fetchers.fed_speeches import FedSpeechFetcher
+
+    parsed_date = date.fromisoformat(speech_date)
+
+    with FedSpeechFetcher() as fetcher:
+        result = fetcher.fetch_and_store(
+            url=url,
+            speaker_name=speaker,
+            speech_date=parsed_date,
+            title=title,
+            speech_type=speech_type,
+            source=source,
+        )
+
+    if result["status"] == "success":
+        console.print(
+            f"Stored speech: {result['speaker']} ({result['date']}) - "
+            f"{result['word_count']} words",
+            style="green",
+        )
+    elif result["status"] == "skipped":
+        console.print(f"Speech already exists: {url}", style="yellow")
+    else:
+        console.print(f"Error: {result.get('error')}", style="red")
+
+
+@app.command()
+def list_speeches(
+    speaker: str = typer.Option(None, "--speaker", "-s", help="Filter by speaker name"),
+    source: str = typer.Option(None, "--source", help="Filter by source"),
+    days: int = typer.Option(90, "--days", "-d", help="Days of history"),
+    limit: int = typer.Option(20, "--limit", "-l", help="Max results"),
+):
+    """List speeches in the database."""
+    from datetime import timedelta
+    from src.db import get_session
+    from src.db.models import Speech
+
+    cutoff = date.today() - timedelta(days=days)
+
+    with get_session() as session:
+        query = session.query(Speech).filter(Speech.speech_date >= cutoff)
+
+        if speaker:
+            query = query.filter(Speech.speaker_name.ilike(f"%{speaker}%"))
+        if source:
+            query = query.filter(Speech.source.ilike(f"%{source}%"))
+
+        speeches = query.order_by(Speech.speech_date.desc()).limit(limit).all()
+
+        if not speeches:
+            console.print("No speeches found", style="yellow")
+            return
+
+        table = Table(title=f"Speeches (last {days} days)")
+        table.add_column("Date", style="cyan")
+        table.add_column("Speaker", style="white")
+        table.add_column("Title", style="white", max_width=40)
+        table.add_column("Type", style="dim")
+        table.add_column("Words", justify="right")
+
+        for s in speeches:
+            table.add_row(
+                s.speech_date.isoformat(),
+                s.speaker_name,
+                (s.title[:37] + "...") if s.title and len(s.title) > 40 else (s.title or "-"),
+                s.speech_type or "-",
+                str(s.word_count or 0),
+            )
+
+        console.print(table)
+        console.print(f"\nTotal: {len(speeches)} speeches", style="dim")
+
+
 if __name__ == "__main__":
     app()

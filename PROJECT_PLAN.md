@@ -13,6 +13,7 @@ Scrivener is a data sourcing and management platform that collects, normalizes, 
 | FRED Fetcher | Complete | 31 core series, 5-year lookback |
 | BLS Fetcher | Complete | Batch fetching, employment/inflation data |
 | Treasury Fetcher | Complete | Auction data from Fiscal Data API |
+| Fed Speech Fetcher | Complete | Speeches, statements, press conferences |
 | Database | Complete | PostgreSQL on Supabase with RLS |
 | Scheduler | Complete | APScheduler with daily sweep + calendar-driven fetches |
 | Query Layer | Complete | SeriesQuery and AuctionQuery utilities |
@@ -50,6 +51,8 @@ typer>=0.12.0          # CLI framework
 rich>=13.0.0           # Rich terminal output
 fastapi>=0.115.0       # API framework
 uvicorn>=0.32.0        # ASGI server
+beautifulsoup4>=4.12.0 # HTML parsing (speeches)
+pypdf2>=3.0.0          # PDF text extraction
 ```
 
 ---
@@ -58,11 +61,12 @@ uvicorn>=0.32.0        # ASGI server
 
 ### Implemented
 
-| Source | Data | Status | Series Count |
-|--------|------|--------|--------------|
+| Source | Data | Status | Notes |
+|--------|------|--------|-------|
 | **FRED** | Macro indicators, rates, GDP, inflation, yields | Complete | 31 core series |
 | **BLS** | Employment, CPI, PPI, wages | Complete | 10+ core series |
 | **Treasury** | Auction results, upcoming auctions | Complete | All security types |
+| **Fed Speeches** | Speeches, statements, press conferences | Complete | HTML & PDF extraction |
 
 ### FRED Core Series
 
@@ -122,6 +126,13 @@ treasury_auctions (id, cusip, security_type, security_term, auction_date, issue_
                    maturity_date, high_yield, high_discount_rate, bid_to_cover_ratio,
                    offering_amount, total_accepted, total_tendered, primary_dealer_accepted,
                    direct_bidder_accepted, indirect_bidder_accepted, reopening, created_at, updated_at)
+
+-- Central bank speakers
+speakers (id, name, title, institution, is_active, created_at, updated_at)
+
+-- Central bank speeches/statements
+speeches (id, url, speaker_id, speaker_name, title, speech_date, speech_type, source,
+          content_type, raw_text, word_count, scraped_at, created_at, updated_at)
 
 -- External table (managed separately)
 economic_events (id, event_name, scheduled_time, country, actual_value, forecast_value, ...)
@@ -295,6 +306,10 @@ scrivener/
 | `scrivener releases` | List known economic release types |
 | `scrivener upcoming` | Show upcoming economic events |
 | `scrivener serve` | Start the API server |
+| `scrivener seed-speakers` | Seed default Fed speakers |
+| `scrivener list-speakers` | List all speakers |
+| `scrivener fetch-speech <url>` | Fetch and store a speech |
+| `scrivener list-speeches` | List stored speeches |
 
 ---
 
@@ -321,6 +336,22 @@ scrivener/
 | `/auctions/cusip/{cusip}` | GET | Get by CUSIP |
 | `/auctions/yields/{type}/{term}` | GET | Get yield history |
 | `/auctions/latest/{type}/{term}` | GET | Get latest for type/term |
+
+### Speakers
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/speakers` | GET | List all speakers |
+| `/speakers/{id}` | GET | Get speaker by ID |
+
+### Speeches
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/speeches` | GET | List speeches with filters |
+| `/speeches/{id}` | GET | Get speech with full text |
+| `/speeches/by-url` | GET | Get speech by URL |
+| `/speeches/speaker/{name}` | GET | Get speeches by speaker |
 
 ### Health
 

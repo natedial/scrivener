@@ -215,3 +215,218 @@ def get_latest_auction_by_term(security_type: str, term: str):
             detail=f"No auction found for {security_type} {term}",
         )
     return result
+
+
+# --- Speaker & Speech Response Models ---
+
+class SpeakerRecord(BaseModel):
+    id: int
+    name: str
+    title: str | None
+    institution: str
+    is_active: bool
+
+
+class SpeechRecord(BaseModel):
+    id: int
+    url: str
+    speaker_name: str
+    title: str | None
+    speech_date: str
+    speech_type: str | None
+    source: str
+    word_count: int | None
+
+
+class SpeechDetail(SpeechRecord):
+    raw_text: str
+    content_type: str | None
+    scraped_at: str | None
+
+
+# --- Speaker Endpoints ---
+
+@app.get("/speakers", response_model=list[SpeakerRecord])
+def list_speakers(
+    institution: Annotated[str | None, Query(description="Filter by institution")] = None,
+    active_only: Annotated[bool, Query()] = True,
+):
+    """List all speakers."""
+    from src.db import get_session
+    from src.db.models import Speaker
+
+    with get_session() as session:
+        query = session.query(Speaker)
+
+        if institution:
+            query = query.filter(Speaker.institution.ilike(f"%{institution}%"))
+        if active_only:
+            query = query.filter(Speaker.is_active == True)
+
+        speakers = query.order_by(Speaker.name).all()
+
+        return [
+            SpeakerRecord(
+                id=s.id,
+                name=s.name,
+                title=s.title,
+                institution=s.institution,
+                is_active=s.is_active,
+            )
+            for s in speakers
+        ]
+
+
+@app.get("/speakers/{speaker_id}", response_model=SpeakerRecord)
+def get_speaker(speaker_id: int):
+    """Get a speaker by ID."""
+    from src.db import get_session
+    from src.db.models import Speaker
+
+    with get_session() as session:
+        speaker = session.query(Speaker).filter(Speaker.id == speaker_id).first()
+        if not speaker:
+            raise HTTPException(status_code=404, detail=f"Speaker {speaker_id} not found")
+
+        return SpeakerRecord(
+            id=speaker.id,
+            name=speaker.name,
+            title=speaker.title,
+            institution=speaker.institution,
+            is_active=speaker.is_active,
+        )
+
+
+# --- Speech Endpoints ---
+
+@app.get("/speeches", response_model=list[SpeechRecord])
+def list_speeches(
+    speaker: Annotated[str | None, Query(description="Filter by speaker name")] = None,
+    source: Annotated[str | None, Query(description="Filter by source institution")] = None,
+    speech_type: Annotated[str | None, Query(description="Filter by type")] = None,
+    days: Annotated[int, Query(ge=1, le=3650)] = 90,
+    limit: Annotated[int, Query(le=1000)] = 100,
+):
+    """List speeches with optional filters."""
+    from datetime import timedelta
+    from src.db import get_session
+    from src.db.models import Speech
+
+    cutoff = date.today() - timedelta(days=days)
+
+    with get_session() as session:
+        query = session.query(Speech).filter(Speech.speech_date >= cutoff)
+
+        if speaker:
+            query = query.filter(Speech.speaker_name.ilike(f"%{speaker}%"))
+        if source:
+            query = query.filter(Speech.source.ilike(f"%{source}%"))
+        if speech_type:
+            query = query.filter(Speech.speech_type == speech_type)
+
+        speeches = query.order_by(Speech.speech_date.desc()).limit(limit).all()
+
+        return [
+            SpeechRecord(
+                id=s.id,
+                url=s.url,
+                speaker_name=s.speaker_name,
+                title=s.title,
+                speech_date=s.speech_date.isoformat(),
+                speech_type=s.speech_type,
+                source=s.source,
+                word_count=s.word_count,
+            )
+            for s in speeches
+        ]
+
+
+@app.get("/speeches/{speech_id}", response_model=SpeechDetail)
+def get_speech(speech_id: int):
+    """Get a speech by ID, including full text."""
+    from src.db import get_session
+    from src.db.models import Speech
+
+    with get_session() as session:
+        speech = session.query(Speech).filter(Speech.id == speech_id).first()
+        if not speech:
+            raise HTTPException(status_code=404, detail=f"Speech {speech_id} not found")
+
+        return SpeechDetail(
+            id=speech.id,
+            url=speech.url,
+            speaker_name=speech.speaker_name,
+            title=speech.title,
+            speech_date=speech.speech_date.isoformat(),
+            speech_type=speech.speech_type,
+            source=speech.source,
+            word_count=speech.word_count,
+            raw_text=speech.raw_text,
+            content_type=speech.content_type,
+            scraped_at=speech.scraped_at.isoformat() if speech.scraped_at else None,
+        )
+
+
+@app.get("/speeches/by-url", response_model=SpeechDetail)
+def get_speech_by_url(url: Annotated[str, Query(description="Speech URL")]):
+    """Get a speech by its URL."""
+    from src.db import get_session
+    from src.db.models import Speech
+
+    with get_session() as session:
+        speech = session.query(Speech).filter(Speech.url == url).first()
+        if not speech:
+            raise HTTPException(status_code=404, detail=f"Speech not found for URL")
+
+        return SpeechDetail(
+            id=speech.id,
+            url=speech.url,
+            speaker_name=speech.speaker_name,
+            title=speech.title,
+            speech_date=speech.speech_date.isoformat(),
+            speech_type=speech.speech_type,
+            source=speech.source,
+            word_count=speech.word_count,
+            raw_text=speech.raw_text,
+            content_type=speech.content_type,
+            scraped_at=speech.scraped_at.isoformat() if speech.scraped_at else None,
+        )
+
+
+@app.get("/speeches/speaker/{speaker_name}", response_model=list[SpeechRecord])
+def get_speeches_by_speaker(
+    speaker_name: str,
+    limit: Annotated[int, Query(le=100)] = 20,
+):
+    """Get speeches by a specific speaker."""
+    from src.db import get_session
+    from src.db.models import Speech
+
+    with get_session() as session:
+        speeches = (
+            session.query(Speech)
+            .filter(Speech.speaker_name.ilike(f"%{speaker_name}%"))
+            .order_by(Speech.speech_date.desc())
+            .limit(limit)
+            .all()
+        )
+
+        if not speeches:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No speeches found for speaker '{speaker_name}'",
+            )
+
+        return [
+            SpeechRecord(
+                id=s.id,
+                url=s.url,
+                speaker_name=s.speaker_name,
+                title=s.title,
+                speech_date=s.speech_date.isoformat(),
+                speech_type=s.speech_type,
+                source=s.source,
+                word_count=s.word_count,
+            )
+            for s in speeches
+        ]

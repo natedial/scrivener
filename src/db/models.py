@@ -169,6 +169,65 @@ class EconomicEvent(Base):
     day_date: Mapped[str | None] = mapped_column(Text)
 
 
+class Speaker(Base):
+    """Central bank officials who give speeches."""
+
+    __tablename__ = "speakers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    title: Mapped[str | None] = mapped_column(Text)  # e.g., "Chair", "Governor"
+    institution: Mapped[str] = mapped_column(Text, nullable=False)  # e.g., "Federal Reserve"
+    is_active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    speeches: Mapped[list["Speech"]] = relationship(back_populates="speaker")
+
+
+class Speech(Base):
+    """Central bank speeches, statements, and press conferences."""
+
+    __tablename__ = "speeches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    url: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    speaker_id: Mapped[int | None] = mapped_column(ForeignKey("speakers.id"))
+    speaker_name: Mapped[str] = mapped_column(Text, nullable=False)  # Denormalized
+    title: Mapped[str | None] = mapped_column(Text)
+    speech_date: Mapped[date] = mapped_column(Date, nullable=False)
+    speech_type: Mapped[str | None] = mapped_column(String(50))  # speech, statement, press_conference
+    source: Mapped[str] = mapped_column(Text, nullable=False)  # Federal Reserve, ECB, etc.
+    content_type: Mapped[str | None] = mapped_column(String(10))  # html, pdf
+    raw_text: Mapped[str] = mapped_column(Text, nullable=False)
+    word_count: Mapped[int | None] = mapped_column(Integer)
+    scraped_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    speaker: Mapped["Speaker"] = relationship(back_populates="speeches")
+
+    __table_args__ = (
+        Index("idx_speeches_speaker_id", "speaker_id"),
+        Index("idx_speeches_speaker_name", "speaker_name"),
+        Index("idx_speeches_date", "speech_date"),
+        Index("idx_speeches_source", "source"),
+        Index("idx_speeches_type", "speech_type"),
+    )
+
+
 class TreasuryAuction(Base):
     """Treasury auction results."""
 
