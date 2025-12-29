@@ -6,6 +6,21 @@ Scrivener is a data sourcing and management platform that collects, normalizes, 
 
 ---
 
+## Current Status
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| FRED Fetcher | Complete | 31 core series, 5-year lookback |
+| BLS Fetcher | Complete | Batch fetching, employment/inflation data |
+| Treasury Fetcher | Complete | Auction data from Fiscal Data API |
+| Database | Complete | PostgreSQL on Supabase with RLS |
+| Scheduler | Complete | APScheduler with daily sweep + calendar-driven fetches |
+| Query Layer | Complete | SeriesQuery and AuctionQuery utilities |
+| API Layer | Complete | FastAPI service with full CRUD |
+| CLI | Complete | Full management interface |
+
+---
+
 ## Tech Stack
 
 ### Core Components
@@ -15,156 +30,109 @@ Scrivener is a data sourcing and management platform that collects, normalizes, 
 | **Data Collection** | Python 3.11+ | Rich ecosystem (pandas, requests, httpx), best library support for FRED/BLS APIs |
 | **Data Pipeline** | Go (future) | High-performance processing when scale demands it |
 | **Database** | PostgreSQL (Supabase) | Managed, user-friendly, built-in REST API, good free tier |
-| **Task Scheduling** | APScheduler / Celery | Python-native, handles cron-like jobs for data fetches |
+| **Task Scheduling** | APScheduler | Python-native, handles cron-like jobs for data fetches |
 | **Caching** | Redis (optional) | For hot data paths when latency matters |
 | **API Layer** | FastAPI | Async, auto-docs, excellent performance for Python |
 
-### Python Dependencies (Initial)
+### Python Dependencies
 
 ```
-httpx              # Async HTTP client
-pandas             # Data manipulation
-sqlalchemy         # ORM / raw SQL
-psycopg2-binary    # PostgreSQL driver
-pydantic           # Data validation
-fredapi            # Official FRED API wrapper
-apscheduler        # Job scheduling
-python-dotenv      # Environment management
+httpx>=0.27.0          # Async HTTP client
+pandas>=2.2.0          # Data manipulation
+sqlalchemy>=2.0.0      # ORM / raw SQL
+psycopg2-binary>=2.9.0 # PostgreSQL driver
+pydantic>=2.0.0        # Data validation
+pydantic-settings>=2.0.0
+fredapi>=0.5.0         # Official FRED API wrapper
+apscheduler>=3.10.0    # Job scheduling
+python-dotenv>=1.0.0   # Environment management
+typer>=0.12.0          # CLI framework
+rich>=13.0.0           # Rich terminal output
+fastapi>=0.115.0       # API framework
+uvicorn>=0.32.0        # ASGI server
 ```
 
 ---
 
-## Data Sources (Free Tier)
+## Data Sources
 
-### Tier 1: Official APIs (Highest Priority)
+### Implemented
 
-| Source | Data | API | Rate Limits | Notes |
-|--------|------|-----|-------------|-------|
-| **FRED** | Macro indicators, rates, GDP, inflation | REST | 120 req/min | Best single source for macro data |
-| **BLS** | Employment, CPI, PPI, wages | REST | 500 req/day (unregistered), more with key | Primary labor market source |
-| **Treasury** | Yields, auction data | REST | Generous | treasury.gov/resource-center/data-chart-center |
-| **SEC EDGAR** | Corporate filings | REST | 10 req/sec | Company fundamentals |
+| Source | Data | Status | Series Count |
+|--------|------|--------|--------------|
+| **FRED** | Macro indicators, rates, GDP, inflation, yields | Complete | 31 core series |
+| **BLS** | Employment, CPI, PPI, wages | Complete | 10+ core series |
+| **Treasury** | Auction results, upcoming auctions | Complete | All security types |
 
-### Tier 2: Supplementary APIs
+### FRED Core Series
+
+| Category | Series |
+|----------|--------|
+| GDP & Growth | GDP, GDPC1, A191RL1Q225SBEA |
+| Inflation | CPIAUCSL, CPILFESL, PCEPI, PCEPILFE |
+| Employment | UNRATE, PAYEMS, ICSA, CCSA, JTSJOL |
+| Interest Rates | FEDFUNDS, DFEDTARU, DFEDTARL, SOFR |
+| Treasury Yields | DGS1MO, DGS3MO, DGS6MO, DGS1, DGS2, DGS5, DGS7, DGS10, DGS20, DGS30 |
+| Yield Spreads | T10Y2Y, T10Y3M |
+| Markets | SP500, VIXCLS, DTWEXBGS |
+
+### BLS Core Series
+
+| Category | Series |
+|----------|--------|
+| Unemployment | LNS14000000 (headline rate) |
+| Employment | CES0000000001 (nonfarm payrolls) |
+| CPI | CUSR0000SA0 (all items), CUSR0000SA0L1E (core) |
+| PPI | WPUFD4 (final demand) |
+
+### Future Sources
 
 | Source | Data | Notes |
 |--------|------|-------|
-| **Census Bureau** | Economic indicators, trade data | api.census.gov |
-| **DOL** | Unemployment claims, OEWS | developer.dol.gov |
-| **World Bank** | International macro | api.worldbank.org |
-| **Yahoo Finance** | Market prices (unofficial) | yfinance library (use carefully, ToS gray area) |
-| **Alpha Vantage** | Markets (free tier limited) | 5 calls/min, 500/day |
-
-### Tier 3: Scraping (Last Resort)
-
-For data without stable APIs:
-- BLS release schedules/calendars
-- Fed meeting minutes/statements
-- Treasury auction announcements
-
-**Scraping principles:**
-- Cache aggressively
-- Respect robots.txt
-- Rate limit strictly
-- Build fallbacks
+| SEC EDGAR | Corporate filings | 10 req/sec |
+| Census Bureau | Economic indicators, trade data | api.census.gov |
+| DOL | Unemployment claims, OEWS | developer.dol.gov |
+| World Bank | International macro | api.worldbank.org |
 
 ---
 
-## Database Schema Design
+## Database Schema
 
-### Core Principles
-
-1. **Normalize series metadata** - Store series info once, observations separately
-2. **Temporal consistency** - All timestamps in UTC, with release dates tracked
-3. **Source tracking** - Know where every data point came from
-4. **Revision handling** - Economic data gets revised; track versions
-
-### Initial Schema
+### Tables
 
 ```sql
 -- Data sources registry
-CREATE TABLE sources (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(50) UNIQUE NOT NULL,      -- 'FRED', 'BLS', 'TREASURY'
-    base_url TEXT,
-    rate_limit_per_min INT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+sources (id, name, base_url, rate_limit_per_min, created_at)
 
 -- Series metadata
-CREATE TABLE series (
-    id SERIAL PRIMARY KEY,
-    source_id INT REFERENCES sources(id),
-    external_id VARCHAR(100) NOT NULL,     -- 'GDP', 'UNRATE', etc.
-    name TEXT NOT NULL,
-    description TEXT,
-    frequency VARCHAR(20),                  -- 'daily', 'weekly', 'monthly', 'quarterly'
-    units VARCHAR(100),
-    seasonal_adjustment VARCHAR(20),
-    last_updated TIMESTAMPTZ,
-    metadata JSONB,                         -- Flexible additional fields
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(source_id, external_id)
-);
+series (id, source_id, external_id, name, description, frequency, units,
+        seasonal_adjustment, last_updated, metadata, created_at)
 
 -- Time series observations
-CREATE TABLE observations (
-    id BIGSERIAL PRIMARY KEY,
-    series_id INT REFERENCES series(id),
-    date DATE NOT NULL,
-    value NUMERIC,
-    release_date TIMESTAMPTZ,              -- When this value was released
-    revision_num INT DEFAULT 0,            -- Track revisions
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(series_id, date, revision_num)
-);
-
--- Index for fast time-range queries
-CREATE INDEX idx_observations_series_date ON observations(series_id, date DESC);
-CREATE INDEX idx_observations_release ON observations(release_date DESC);
+observations (id, series_id, date, value, release_date, revision_num, created_at)
 
 -- Data fetch job tracking
-CREATE TABLE fetch_jobs (
-    id SERIAL PRIMARY KEY,
-    source_id INT REFERENCES sources(id),
-    series_ids INT[],                      -- Which series this job updates
-    schedule VARCHAR(50),                  -- Cron expression
-    last_run TIMESTAMPTZ,
-    last_status VARCHAR(20),
-    next_run TIMESTAMPTZ,
-    config JSONB,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+fetch_jobs (id, source_id, series_ids, schedule, last_run, last_status, next_run, config)
 
--- Audit log for debugging
-CREATE TABLE fetch_logs (
-    id BIGSERIAL PRIMARY KEY,
-    job_id INT REFERENCES fetch_jobs(id),
-    started_at TIMESTAMPTZ,
-    completed_at TIMESTAMPTZ,
-    status VARCHAR(20),
-    records_fetched INT,
-    records_inserted INT,
-    error_message TEXT
-);
+-- Audit log
+fetch_logs (id, job_id, started_at, completed_at, status, records_fetched, records_inserted, error_message)
 
--- Economic release calendar for scheduled fetches
-CREATE TABLE release_calendar (
-    id SERIAL PRIMARY KEY,
-    release_name VARCHAR(100) NOT NULL,     -- 'CPI', 'NFP', 'FOMC'
-    source_id INT REFERENCES sources(id),
-    series_ids INT[],                        -- Which series this release affects
-    scheduled_time TIMESTAMPTZ NOT NULL,     -- When the release is scheduled
-    actual_time TIMESTAMPTZ,                 -- When it actually released (if different)
-    status VARCHAR(20) DEFAULT 'pending',    -- 'pending', 'released', 'delayed'
-    fetch_triggered_at TIMESTAMPTZ,
-    notes TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+-- Treasury auction data
+treasury_auctions (id, cusip, security_type, security_term, auction_date, issue_date,
+                   maturity_date, high_yield, high_discount_rate, bid_to_cover_ratio,
+                   offering_amount, total_accepted, total_tendered, primary_dealer_accepted,
+                   direct_bidder_accepted, indirect_bidder_accepted, reopening, created_at, updated_at)
 
-CREATE INDEX idx_release_calendar_scheduled ON release_calendar(scheduled_time);
-CREATE INDEX idx_release_calendar_status ON release_calendar(status) WHERE status = 'pending';
+-- External table (managed separately)
+economic_events (id, event_name, scheduled_time, country, actual_value, forecast_value, ...)
 ```
+
+### Indexes
+
+- `idx_observations_series_date` - Fast time-range queries
+- `idx_observations_release` - Release date lookups
+- `idx_treasury_auctions_date` - Auction date queries
+- `idx_treasury_auctions_type_term` - Type/term filtering
 
 ---
 
@@ -176,31 +144,39 @@ CREATE INDEX idx_release_calendar_status ON release_calendar(status) WHERE statu
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │   Fetchers   │  │   Fetchers   │  │   Scrapers   │          │
-│  │   (FRED)     │  │   (BLS)      │  │   (misc)     │          │
+│  │   FRED       │  │   BLS        │  │  Treasury    │          │
+│  │   Fetcher    │  │   Fetcher    │  │  Fetcher     │          │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘          │
 │         │                 │                 │                   │
 │         └─────────────────┼─────────────────┘                   │
 │                           ▼                                     │
 │                  ┌─────────────────┐                            │
-│                  │   Normalizer    │  ← Transforms to common    │
-│                  │   / Validator   │    schema, validates       │
+│                  │  Base Fetcher   │  ← Upserts, validation     │
+│                  │  + Normalizer   │                            │
 │                  └────────┬────────┘                            │
 │                           │                                     │
 │                           ▼                                     │
 │                  ┌─────────────────┐                            │
-│                  │   PostgreSQL    │  ← Supabase                │
-│                  │   (Supabase)    │                            │
+│                  │   PostgreSQL    │  ← Supabase (session pool) │
+│                  │                 │                            │
 │                  └────────┬────────┘                            │
 │                           │                                     │
 │         ┌─────────────────┼─────────────────┐                   │
 │         │                 │                 │                   │
 │         ▼                 ▼                 ▼                   │
 │  ┌────────────┐   ┌────────────┐   ┌────────────┐              │
-│  │  PostgREST │   │  FastAPI   │   │   Direct   │              │
-│  │  (built-in)│   │  (custom)  │   │   SQL      │              │
+│  │  FastAPI   │   │   Query    │   │    CLI     │              │
+│  │  Service   │   │   Layer    │   │  (typer)   │              │
 │  └────────────┘   └────────────┘   └────────────┘              │
 │                                                                 │
+├─────────────────────────────────────────────────────────────────┤
+│                       SCHEDULER                                 │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │  APScheduler                                              │  │
+│  │  • Daily sweep: 5pm ET (all sources)                      │  │
+│  │  • Calendar check: 6am & 6pm ET (14-hour lookahead)       │  │
+│  │  • Event-triggered: 1 min after release time              │  │
+│  └──────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -214,60 +190,44 @@ CREATE INDEX idx_release_calendar_status ON release_calendar(status) WHERE statu
 
 ## Project Phases
 
-### Phase 1: Foundation (Current)
+### Phase 1: Foundation - COMPLETE
 
-**Goal:** Basic infrastructure, first data source working end-to-end
+- [x] Set up project structure
+- [x] Configure Supabase project + connection
+- [x] Implement database schema
+- [x] Build FRED fetcher (highest value, most comprehensive)
+- [x] Create base fetcher class with common logic
+- [x] Basic CLI for manual data pulls
+- [x] Logging and error handling
 
-- [ ] Set up project structure
-- [ ] Configure Supabase project + connection
-- [ ] Implement database schema
-- [ ] Build FRED fetcher (highest value, most comprehensive)
-- [ ] Create base fetcher class with common logic
-- [ ] Basic CLI for manual data pulls
-- [ ] Logging and error handling
+### Phase 2: Expand Sources - COMPLETE
 
-**Key series to start with (FRED):**
-- `GDP` - Gross Domestic Product
-- `UNRATE` - Unemployment Rate
-- `CPIAUCSL` - Consumer Price Index
-- `FEDFUNDS` - Federal Funds Rate
-- `DGS10` - 10-Year Treasury Yield
-- `SP500` - S&P 500 Index
+- [x] BLS API integration (batch fetching)
+- [x] Treasury data integration (Fiscal Data API)
+- [x] APScheduler for automated fetches
+- [x] Economic calendar integration (reads from `economic_events` table)
+- [x] Event-to-series mapping (regex-based)
 
-### Phase 2: Expand Sources
+### Phase 3: API Layer - COMPLETE
 
-**Goal:** Add BLS, Treasury, basic scheduling
+- [x] FastAPI service with key endpoints
+- [x] Query interface: by series, date range, latest
+- [x] Batch queries (multiple series at once)
+- [x] Auction data endpoints (recent, summary, by CUSIP, yield history)
+- [x] Health check endpoint
+- [ ] Authentication for external access (not needed - service-to-service)
+- [ ] Rate limiting (not needed - internal service)
 
-- [ ] BLS API integration
-- [ ] Treasury data integration
-- [ ] APScheduler for automated fetches
-- [ ] Series dependency tracking (e.g., real GDP needs deflator)
-- [ ] Basic data quality checks
+### Phase 4: Real-time & Reliability - PARTIAL
 
-### Phase 3: API Layer
-
-**Goal:** Make data accessible to other tools
-
-- [ ] FastAPI service with key endpoints
-- [ ] Query interface: by series, date range, latest
-- [ ] Aggregation endpoints (% change, moving averages)
-- [ ] Authentication for external access
-- [ ] Rate limiting
-
-### Phase 4: Real-time & Reliability
-
-**Goal:** Near-real-time data access, production hardening
-
-- [ ] BLS release calendar monitoring
-- [ ] Webhook/polling for new releases
+- [x] Economic release calendar monitoring (via `economic_events` table)
+- [x] Calendar-driven fetch scheduling
 - [ ] Redis caching for hot paths
 - [ ] Alerting on fetch failures
 - [ ] Data freshness monitoring
 - [ ] Revision tracking and alerts
 
 ### Phase 5: High-Performance Pipeline (Future)
-
-**Goal:** Go-based pipeline for latency-critical paths
 
 - [ ] Identify bottlenecks requiring Go rewrite
 - [ ] Implement Go data pipeline components
@@ -281,37 +241,34 @@ CREATE INDEX idx_release_calendar_status ON release_calendar(status) WHERE statu
 scrivener/
 ├── src/
 │   ├── __init__.py
-│   ├── config.py              # Configuration management
+│   ├── cli.py                # CLI commands (typer)
+│   ├── config.py             # Configuration management (pydantic-settings)
 │   ├── db/
 │   │   ├── __init__.py
-│   │   ├── connection.py      # Database connection handling
-│   │   ├── models.py          # SQLAlchemy models
-│   │   └── migrations/        # Schema migrations
+│   │   ├── connection.py     # Database connection handling
+│   │   └── models.py         # SQLAlchemy models
 │   ├── fetchers/
 │   │   ├── __init__.py
-│   │   ├── base.py            # Base fetcher class
-│   │   ├── fred.py            # FRED API fetcher
-│   │   ├── bls.py             # BLS API fetcher
-│   │   └── treasury.py        # Treasury data fetcher
-│   ├── scrapers/
-│   │   ├── __init__.py
-│   │   └── base.py            # Base scraper class
-│   ├── normalizers/
-│   │   ├── __init__.py
-│   │   └── base.py            # Data normalization logic
+│   │   ├── base.py           # Base fetcher class
+│   │   ├── fred.py           # FRED API fetcher
+│   │   ├── bls.py            # BLS API fetcher
+│   │   └── treasury.py       # Treasury Fiscal Data API fetcher
 │   ├── scheduler/
 │   │   ├── __init__.py
-│   │   └── jobs.py            # Scheduled job definitions
+│   │   ├── scheduler.py      # APScheduler setup
+│   │   ├── jobs.py           # Scheduled job definitions
+│   │   ├── calendar.py       # Economic events calendar integration
+│   │   └── runner.py         # Main scheduler runner
+│   ├── query/
+│   │   ├── __init__.py
+│   │   ├── series.py         # SeriesQuery utilities
+│   │   └── auctions.py       # AuctionQuery utilities
 │   └── api/
 │       ├── __init__.py
-│       ├── main.py            # FastAPI app
-│       └── routes/
+│       └── main.py           # FastAPI app
+├── migrations/
+│   └── 001_initial_schema.sql
 ├── tests/
-│   ├── __init__.py
-│   ├── test_fetchers/
-│   └── test_api/
-├── scripts/
-│   └── seed_series.py         # Initial series setup
 ├── .env.example
 ├── pyproject.toml
 ├── requirements.txt
@@ -320,47 +277,107 @@ scrivener/
 
 ---
 
-## Key Considerations
+## CLI Commands
 
-### Accuracy
-
-- **Source of truth:** Always prefer official government sources
-- **Revision tracking:** Economic data is revised; store revision history
-- **Validation:** Sanity checks on fetched data (null checks, range validation)
-- **Audit trail:** Log every fetch operation
-
-### Latency
-
-- **Caching strategy:** Redis for frequently accessed series
-- **Connection pooling:** Supabase provides this, but configure appropriately
-- **Batch operations:** Insert in batches, not row-by-row
-- **Indexed queries:** Ensure proper indexes on series_id, date
-
-### Reliability
-
-- **Retry logic:** Exponential backoff for failed fetches
-- **Circuit breakers:** Don't hammer failing APIs
-- **Graceful degradation:** Serve stale data if fresh unavailable
-- **Monitoring:** Track fetch success rates, data freshness
-
-### Cost (Free Tier Limits)
-
-| Service | Free Tier | Strategy |
-|---------|-----------|----------|
-| Supabase | 500MB DB, 2GB bandwidth | Start here, monitor usage |
-| FRED | 120 req/min | More than enough for daily fetches |
-| BLS | 500 req/day (unregistered) | Get API key for more |
-| Alpha Vantage | 5 req/min, 500/day | Use sparingly for market data |
+| Command | Description |
+|---------|-------------|
+| `scrivener init-db` | Initialize database schema |
+| `scrivener fetch <source> <series>` | Fetch single series |
+| `scrivener fetch-core <source>` | Fetch all core series for source |
+| `scrivener list-series <source>` | List available core series |
+| `scrivener sweep [source]` | Run immediate sweep (fred/bls/all) |
+| `scrivener scheduler` | Start the scheduler daemon |
+| `scrivener config` | Show current configuration |
+| `scrivener query <series_id>` | Query time series data |
+| `scrivener query-auctions` | Query Treasury auction data |
+| `scrivener auctions` | Fetch Treasury auction data |
+| `scrivener upcoming-auctions` | Show upcoming Treasury auctions |
+| `scrivener releases` | List known economic release types |
+| `scrivener upcoming` | Show upcoming economic events |
+| `scrivener serve` | Start the API server |
 
 ---
 
-## Immediate Next Steps
+## API Endpoints
 
-1. **Create Supabase project** - Set up database, get connection string
-2. **Initialize Python project** - pyproject.toml, dependencies
-3. **Implement schema** - Run migrations on Supabase
-4. **Build FRED fetcher** - End-to-end working example
-5. **Test with 5-10 key series** - Validate data flow
+### Series
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/series` | GET | List all series |
+| `/series/search` | GET | Search series by name |
+| `/series/{id}` | GET | Get series metadata |
+| `/series/{id}/latest` | GET | Get latest value |
+| `/series/{id}/observations` | GET | Get time series data |
+| `/series/{id}/change` | GET | Calculate period change |
+| `/series/batch/latest` | POST | Get multiple latest values |
+
+### Auctions
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/auctions` | GET | Get recent auctions |
+| `/auctions/summary` | GET | Get aggregate statistics |
+| `/auctions/cusip/{cusip}` | GET | Get by CUSIP |
+| `/auctions/yields/{type}/{term}` | GET | Get yield history |
+| `/auctions/latest/{type}/{term}` | GET | Get latest for type/term |
+
+### Health
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+
+---
+
+## Scheduler Configuration
+
+| Job | Schedule | Description |
+|-----|----------|-------------|
+| Daily Sweep | 5pm ET | Fetch all core series from all sources |
+| Calendar Check | 6am & 6pm ET | Check economic_events table, schedule fetches |
+| Event Fetch | Release time + 1 min | Triggered by calendar for known releases |
+
+### Event-to-Series Mapping
+
+The scheduler maps economic event names to data series using regex patterns:
+
+| Event Pattern | Release Type | FRED Series | BLS Series |
+|---------------|--------------|-------------|------------|
+| CPI / Consumer Price Index | CPI | CPIAUCSL, CPILFESL | CUSR0000SA0, CUSR0000SA0L1E |
+| Nonfarm Payrolls / Employment | NFP | PAYEMS, UNRATE | CES0000000001, LNS14000000 |
+| GDP | GDP | GDP, GDPC1 | - |
+| JOLTS | JOLTS | JTSJOL | JTS000000000000000JOL |
+| PCE | PCE | PCEPI, PCEPILFE | - |
+| Initial Claims | CLAIMS | ICSA, CCSA | - |
+
+---
+
+## Configuration
+
+Environment variables (`.env`):
+
+```bash
+# Database (Supabase session pooler)
+DATABASE_URL=postgresql://postgres.xxx:password@aws-0-us-east-1.pooler.supabase.com:5432/postgres
+
+# Alternative individual settings
+SUPABASE_DB_HOST=aws-0-us-east-1.pooler.supabase.com
+SUPABASE_DB_PORT=5432
+SUPABASE_DB_NAME=postgres
+SUPABASE_DB_USER=postgres.xxx
+SUPABASE_DB_PASSWORD=your-password
+
+# API Keys
+FRED_API_KEY=your-fred-api-key
+BLS_API_KEY=your-bls-api-key  # Optional, increases rate limits
+
+# Scheduler
+DEFAULT_LOOKBACK_YEARS=5
+DAILY_SWEEP_HOUR=17
+DAILY_SWEEP_MINUTE=0
+TIMEZONE=America/New_York
+```
 
 ---
 
@@ -368,49 +385,21 @@ scrivener/
 
 | Decision | Choice | Notes |
 |----------|--------|-------|
-| **Historical depth** | 5 years initial | Schema supports fetching further back without overwriting |
-| **Update frequency** | Daily sweep at 5pm ET + calendar-driven | Scheduled pulls for sensitive releases (CPI, NFP, etc.) |
-| **Market data** | Delayed feeds acceptable | Multiple sources needed for fixed income coverage |
-| **Supabase region** | AWS us-east-1 | Aligns with other infrastructure |
+| Historical depth | 5 years initial | Schema supports fetching further back |
+| Update frequency | Daily sweep at 5pm ET + calendar-driven | Calendar checks at 6am/6pm ET |
+| Market data | Delayed feeds acceptable | Real-time not required |
+| Supabase region | AWS us-east-1 | Aligns with other infrastructure |
+| Connection type | Session pooler | Not direct connection (DNS issues) |
+| Calendar source | `economic_events` table | External table, regex mapping to series |
+| API auth | None | Service-to-service only, internal use |
 
 ---
 
-## Fixed Income Data Sources
+## Next Steps / Future Work
 
-US fixed income is a priority. Free/delayed options:
-
-| Source | Data Available | Limitations |
-|--------|----------------|-------------|
-| **FRED** | Treasury yields (DGS1-DGS30), SOFR, Fed Funds, swap rates | Daily, no intraday |
-| **Treasury Direct** | Auction results, daily yield curves | Official source, daily |
-| **Nasdaq Data Link** (Quandl) | Some free bond datasets | Limited free tier |
-| **Yahoo Finance** | Bond ETF prices (TLT, IEF, SHY as proxies) | ToS concerns, delayed |
-| **Investing.com** | Rates futures (scraping) | Requires scraping, fragile |
-
-**Rates futures challenge:** CME protects futures data aggressively. For free tier:
-- Use underlying rates from FRED as primary (Fed Funds, SOFR, Treasury yields)
-- Bond ETFs as market sentiment proxies
-- Consider paid data later for actual futures prices
-
----
-
-## Economic Calendar & Scheduled Releases
-
-Key releases requiring calendar-driven fetches:
-
-| Release | Source | Typical Time (ET) | Frequency |
-|---------|--------|-------------------|-----------|
-| CPI | BLS | 8:30 AM | Monthly |
-| PPI | BLS | 8:30 AM | Monthly |
-| Employment (NFP) | BLS | 8:30 AM | Monthly (1st Friday) |
-| JOLTS | BLS | 10:00 AM | Monthly |
-| GDP | BEA/FRED | 8:30 AM | Quarterly |
-| PCE | BEA/FRED | 8:30 AM | Monthly |
-| FOMC Decision | Fed | 2:00 PM | ~8x/year |
-| Initial Claims | DOL | 8:30 AM | Weekly (Thursday) |
-
-**Implementation approach:**
-1. Maintain release calendar table in DB
-2. Scheduler checks calendar daily, queues jobs for next day's releases
-3. Jobs trigger ~1 min after scheduled release time
-4. Retry logic for delayed releases
+1. **Redis caching** - Add caching layer for frequently accessed series
+2. **Alerting** - Notify on fetch failures or stale data
+3. **Data freshness dashboard** - Monitor last update times
+4. **Revision tracking** - Track and alert on economic data revisions
+5. **Additional sources** - SEC EDGAR, Census Bureau, DOL
+6. **Go pipeline** - High-performance processing for scale

@@ -167,3 +167,40 @@ class EconomicEvent(Base):
     event_date: Mapped[date | None] = mapped_column(Date)
     importance_indicator: Mapped[str | None] = mapped_column(Text)
     day_date: Mapped[str | None] = mapped_column(Text)
+
+
+class TreasuryAuction(Base):
+    """Treasury auction results."""
+
+    __tablename__ = "treasury_auctions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cusip: Mapped[str] = mapped_column(String(9), nullable=False)
+    security_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    security_term: Mapped[str | None] = mapped_column(String(20))
+    auction_date: Mapped[date] = mapped_column(Date, nullable=False)
+    issue_date: Mapped[date | None] = mapped_column(Date)
+    maturity_date: Mapped[date | None] = mapped_column(Date)
+    high_yield: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    high_discount_rate: Mapped[Decimal | None] = mapped_column(Numeric(10, 6))
+    bid_to_cover_ratio: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+    total_accepted: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
+    total_tendered: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
+    offering_amount: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
+    competitive_accepted: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
+    noncompetitive_accepted: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
+    primary_dealer_accepted: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
+    direct_bidder_accepted: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
+    indirect_bidder_accepted: Mapped[Decimal | None] = mapped_column(Numeric(20, 2))
+    reopening: Mapped[bool] = mapped_column(default=False)
+    original_cusip: Mapped[str | None] = mapped_column(String(9))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("idx_treasury_auctions_cusip", "cusip"),
+        Index("idx_treasury_auctions_date", "auction_date"),
+        Index("idx_treasury_auctions_type", "security_type"),
+        Index("idx_treasury_auctions_cusip_date", "cusip", "auction_date", unique=True),
+    )

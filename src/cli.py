@@ -239,6 +239,69 @@ def sweep(
 
 
 @app.command()
+def auctions(
+    days: int = typer.Option(90, "--days", "-d", help="Days of history to fetch"),
+    security_type: str = typer.Option(None, "--type", "-t", help="Security type (Bill, Note, Bond, TIPS, FRN)"),
+):
+    """Fetch Treasury auction data."""
+    from datetime import timedelta
+    from src.fetchers.treasury import TreasuryFetcher
+
+    fetcher = TreasuryFetcher()
+    end_date = date.today()
+    start_date = end_date - timedelta(days=days)
+
+    console.print(f"Fetching Treasury auctions from {start_date} to {end_date}...", style="yellow")
+    if security_type:
+        console.print(f"  Filtering by type: {security_type}")
+
+    result = fetcher.fetch_and_store(
+        start_date=start_date,
+        end_date=end_date,
+        security_type=security_type,
+    )
+
+    if result["status"] == "success":
+        console.print(
+            f"Success! Fetched {result['records_fetched']} auctions, "
+            f"stored {result['records_stored']}",
+            style="green",
+        )
+    else:
+        console.print(f"Error: {result.get('error')}", style="red")
+
+
+@app.command()
+def upcoming_auctions():
+    """Show upcoming Treasury auctions."""
+    from src.fetchers.treasury import TreasuryFetcher
+
+    fetcher = TreasuryFetcher()
+    auctions = fetcher.fetch_upcoming_auctions()
+
+    if not auctions:
+        console.print("No upcoming auctions found", style="yellow")
+        return
+
+    table = Table(title="Upcoming Treasury Auctions")
+    table.add_column("Auction Date", style="cyan")
+    table.add_column("Type", style="white")
+    table.add_column("Term", style="white")
+    table.add_column("CUSIP", style="dim")
+
+    for auction in auctions[:20]:  # Show first 20
+        table.add_row(
+            auction.get("auction_date", ""),
+            auction.get("security_type", ""),
+            auction.get("security_term", ""),
+            auction.get("cusip", ""),
+        )
+
+    console.print(table)
+    console.print(f"\nTotal: {len(auctions)} upcoming auctions", style="dim")
+
+
+@app.command()
 def releases():
     """List known economic release types."""
     from src.scheduler.calendar import get_release_definitions
@@ -307,6 +370,111 @@ def upcoming(
 
     console.print(table)
     console.print(f"\nTotal: {len(events)} mapped events", style="dim")
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("0.0.0.0", "--host", "-h", help="Host to bind to"),
+    port: int = typer.Option(8000, "--port", "-p", help="Port to bind to"),
+    reload: bool = typer.Option(False, "--reload", "-r", help="Enable auto-reload"),
+):
+    """Start the API server."""
+    import uvicorn
+
+    console.print(f"Starting Scrivener API on http://{host}:{port}", style="green")
+    console.print(f"API docs: http://{host}:{port}/docs", style="dim")
+
+    uvicorn.run(
+        "src.api.main:app",
+        host=host,
+        port=port,
+        reload=reload,
+    )
+
+
+@app.command()
+def query(
+    series_id: str = typer.Argument(..., help="Series ID to query (e.g., GDP, UNRATE)"),
+    latest: bool = typer.Option(False, "--latest", "-l", help="Get latest value only"),
+    days: int = typer.Option(365, "--days", "-d", help="Days of history"),
+):
+    """Query a time series."""
+    from src.query import SeriesQuery
+
+    if latest:
+        result = SeriesQuery.get_latest(series_id)
+        if result:
+            console.print(f"{series_id}: {result['value']} ({result['date']})")
+        else:
+            console.print(f"No data found for {series_id}", style="red")
+    else:
+        from datetime import timedelta
+        end = date.today()
+        start = end - timedelta(days=days)
+
+        obs = SeriesQuery.get_observations(series_id, start_date=start, end_date=end)
+
+        if not obs:
+            console.print(f"No data found for {series_id}", style="red")
+            return
+
+        table = Table(title=f"{series_id} ({len(obs)} observations)")
+        table.add_column("Date", style="cyan")
+        table.add_column("Value", justify="right")
+
+        # Show first 5 and last 5
+        display = obs[:5] + [{"date": "...", "value": None}] + obs[-5:] if len(obs) > 10 else obs
+
+        for o in display:
+            val = f"{o['value']:.4f}" if o['value'] is not None else "..."
+            table.add_row(o["date"], val)
+
+        console.print(table)
+
+
+@app.command()
+def query_auctions(
+    days: int = typer.Option(30, "--days", "-d", help="Days of history"),
+    security_type: str = typer.Option(None, "--type", "-t", help="Security type filter"),
+    summary: bool = typer.Option(False, "--summary", "-s", help="Show summary stats only"),
+):
+    """Query Treasury auction data."""
+    from src.query import AuctionQuery
+
+    if summary:
+        stats = AuctionQuery.get_summary_stats(security_type=security_type, days=days)
+        console.print(f"\nAuction Summary (last {days} days):", style="bold")
+        console.print(f"  Count: {stats['count']}")
+        if stats.get('total_offered_millions'):
+            console.print(f"  Total Offered: ${stats['total_offered_millions']:,.0f}M")
+        if stats.get('avg_yield'):
+            console.print(f"  Avg Yield: {stats['avg_yield']:.3f}%")
+        if stats.get('avg_bid_to_cover'):
+            console.print(f"  Avg Bid/Cover: {stats['avg_bid_to_cover']:.2f}")
+        if stats.get('by_type'):
+            console.print(f"  By Type: {stats['by_type']}")
+    else:
+        auctions = AuctionQuery.get_recent(days=days, security_type=security_type, limit=20)
+
+        table = Table(title=f"Recent Auctions (last {days} days)")
+        table.add_column("Date", style="cyan")
+        table.add_column("Type", style="white")
+        table.add_column("Term", style="white")
+        table.add_column("Yield", justify="right")
+        table.add_column("B/C", justify="right")
+
+        for a in auctions:
+            yield_str = f"{a['high_yield']:.3f}%" if a['high_yield'] else "-"
+            btc_str = f"{a['bid_to_cover_ratio']:.2f}" if a['bid_to_cover_ratio'] else "-"
+            table.add_row(
+                a["auction_date"],
+                a["security_type"],
+                a["security_term"] or "-",
+                yield_str,
+                btc_str,
+            )
+
+        console.print(table)
 
 
 if __name__ == "__main__":

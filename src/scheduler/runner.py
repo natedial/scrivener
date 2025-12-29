@@ -112,10 +112,19 @@ class SchedulerRunner:
 
     def list_jobs(self) -> list[dict]:
         """List all scheduled jobs."""
-        return [
-            {"id": job.id, "name": job.name, "next_run": job.next_run_time}
-            for job in self.scheduler.get_jobs()
-        ]
+        now = datetime.now(self.tz)
+        jobs = []
+        for job in self.scheduler.get_jobs():
+            # Calculate next run from trigger if not yet scheduled
+            next_run = getattr(job, "next_run_time", None)
+            if next_run is None and job.trigger:
+                next_run = job.trigger.get_next_fire_time(None, now)
+            jobs.append({
+                "id": job.id,
+                "name": job.name,
+                "next_run": next_run,
+            })
+        return jobs
 
     def start(self) -> None:
         """Start the scheduler."""
@@ -125,7 +134,10 @@ class SchedulerRunner:
         # Run initial check
         self._check_and_schedule_events()
 
-        logger.info(f"Starting scheduler with {len(self.scheduler.get_jobs())} jobs...")
+        job_count = len(self.scheduler.get_jobs())
+        logger.info(f"Starting scheduler with {job_count} jobs...")
+
+        # Log jobs before start (using trigger to calculate next run)
         for job in self.list_jobs():
             logger.info(f"  - {job['name']}: next run {job['next_run']}")
 
